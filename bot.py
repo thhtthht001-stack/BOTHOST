@@ -275,7 +275,7 @@ USER_AGENT = os.getenv(
 DEADLINE_HOURS = float(os.getenv("DEADLINE_HOURS", "72"))
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "600"))
 RENOTIFY_HOURS = float(os.getenv("RENOTIFY_HOURS", "24"))
-MAX_PAGES = int(os.getenv("MAX_PAGES", "8"))
+MAX_PAGES = int(os.getenv("MAX_PAGES", "2"))
 MAX_AGE_DAYS = float(os.getenv("MAX_AGE_DAYS", "30"))
 MAX_PER_RUN = int(os.getenv("MAX_PER_RUN", "15"))
 AUTO_NOTIFY = os.getenv("AUTO_NOTIFY", "0") == "1"
