@@ -1,39 +1,25 @@
-# Используем официальный образ Python
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# Устанавливаем системные зависимости, необходимые для Chromium (браузера Playwright)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxrandr2 \
-    libxdamage1 \
-    libxfixes3 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libasound2 \
-    libxshmfence1 \
-    libgbm1 \
-    libgtk-3-0 \
-    && rm -rf /var/lib/apt/lists/*
+# Устанавливаем переменные окружения для корректной работы Python в Docker
+# (чтобы логи выводились сразу, а не копились в буфере)
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Устанавливаем рабочую директорию
+# Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# Копируем и устанавливаем Python-зависимости
+# Копируем файл с Python-зависимостями
 COPY requirements.txt .
+
+# Устанавливаем Python-библиотеки
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем браузер Chromium и его зависимости
+# Устанавливаем браузер Chromium и ВСЕ необходимые системные библиотеки для него
+# Флаг --with-deps автоматически подтянет нужные пакеты Linux
 RUN playwright install --with-deps chromium
 
-# Копируем остальной код
+# Копируем все остальные файлы проекта (bot.py, json файлы и т.д.)
 COPY . .
 
-# Команда для запуска
+# Команда для запуска бота
 CMD ["python", "bot.py"]
