@@ -87,9 +87,11 @@ def _bootstrap_pip_packages() -> None:
     _refresh_sys_path()
 
 
-def _chromium_installed() -> bool:
+def _chromium_binary_path() -> str | None:
+    """Возвращает путь к реальному бинарнику Chromium, если он есть."""
     if _os_bootstrap.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "0":
-        return True
+        # Явно указано использовать системный Chromium — не наша забота
+        return "system"
     candidates = [
         _os_bootstrap.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "",
         _os_bootstrap.path.expanduser("~/.cache/ms-playwright"),
@@ -99,16 +101,47 @@ def _chromium_installed() -> bool:
             if _os_bootstrap.environ.get("LOCALAPPDATA") else ""
         ),
     ]
+    rel_paths = (
+        "chrome-linux/chrome",
+        "chrome-linux64/chrome",
+        "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+        "chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
+        "chrome-win/chrome.exe",
+    )
     for d in candidates:
         if not d or not _os_bootstrap.path.isdir(d):
             continue
         try:
             for name in _os_bootstrap.listdir(d):
-                if name.startswith("chromium-"):
-                    return True
+                if not name.startswith("chromium-"):
+                    continue
+                base = _os_bootstrap.path.join(d, name)
+                for rel in rel_paths:
+                    p = _os_bootstrap.path.join(base, rel)
+                    if _os_bootstrap.path.isfile(p):
+                        return p
         except Exception:
             pass
-    return False
+    return None
+
+
+def _chromium_installed() -> bool:
+    return _chromium_binary_path() is not None
+
+
+def _install_chromium(force: bool = False) -> bool:
+    """Запускает playwright install chromium. Возвращает True при успехе."""
+    args = [_sys_bootstrap.executable, "-m", "playwright", "install"]
+    if force:
+        args.append("--force")
+    args.append("chromium")
+    print(f"[bootstrap] {'Пере' if force else ''}устанавливаю Chromium: {' '.join(args)}")
+    try:
+        _subprocess_bootstrap.check_call(args)
+        return True
+    except Exception as e:
+        print(f"[bootstrap] Не удалось установить Chromium: {e}")
+        return False
 
 
 def _bootstrap_chromium() -> None:
@@ -118,10 +151,8 @@ def _bootstrap_chromium() -> None:
         return
 
     on_linux = _sys_bootstrap.platform.startswith("linux")
-    has_browser = _chromium_installed()
 
     if on_linux:
-        # Всегда проверяем системные зависимости — без них Chromium не запустится
         print("[bootstrap] Проверяю системные зависимости Chromium (install-deps)...")
         try:
             r = _subprocess_bootstrap.run(
@@ -129,8 +160,8 @@ def _bootstrap_chromium() -> None:
                 capture_output=True, text=True, timeout=600,
             )
             if r.returncode != 0:
-                print(f"[bootstrap] install-deps завершился с кодом {r.returncode}")
-                print("[bootstrap] Если Chromium не запустится — установите вручную (нужен sudo):")
+                print(f"[bootstrap] install-deps вернул код {r.returncode}")
+                print("[bootstrap] Если Chromium не запустится — установите вручную (sudo):")
                 print("  sudo apt install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 "
                       "libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 "
                       "libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 "
@@ -138,18 +169,11 @@ def _bootstrap_chromium() -> None:
         except Exception as e:
             print(f"[bootstrap] install-deps не выполнен: {e}")
 
-    if not has_browser:
-        print("[bootstrap] Скачиваю Chromium для Playwright...")
-        try:
-            _subprocess_bootstrap.check_call(
-                [_sys_bootstrap.executable, "-m", "playwright", "install", "chromium"]
-            )
-        except Exception as e:
-            print(f"[bootstrap] Не удалось скачать Chromium: {e}")
+    if not _chromium_installed():
+        _install_chromium()
 
 
-def _verify_chromium_launch() -> bool:
-    """Пробует запустить Chromium — чтобы ошибки было видно сразу, а не при первом /af."""
+def _verify_chromium_launch(retry: bool = True) -> bool:
     if _os_bootstrap.environ.get("SKIP_CHROMIUM_VERIFY") == "1":
         return True
     try:
@@ -169,8 +193,17 @@ def _verify_chromium_launch() -> bool:
         err = str(e)
         print(f"[bootstrap] ❌ Chromium НЕ запускается: {err[:500]}")
         low = err.lower()
-        if any(k in low for k in ("libnss", "shared object", "cannot open",
-                                   "missing dependencies", "error while loading")):
+
+        if retry and ("executable doesn't exist" in low or "playwright install" in low):
+            print("[bootstrap] Chromium отсутствует или повреждён — переустанавливаю...")
+            if _install_chromium(force=True):
+                return _verify_chromium_launch(retry=False)
+
+        if "asyncio loop" in low:
+            print("[bootstrap] ⚠️ Похоже, в этом процессе остался запущенный asyncio-цикл. "
+                  "Обычно такого при старте не бывает. Если повторится — перезапустите бота.")
+        elif any(k in low for k in ("libnss", "shared object", "cannot open",
+                                     "missing dependencies", "error while loading")):
             print("[bootstrap] ⚠️ Не хватает системных библиотек. Выполните под root:")
             print("  sudo python3 -m playwright install-deps chromium")
             print("  или:")
@@ -178,9 +211,6 @@ def _verify_chromium_launch() -> bool:
                   "libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 "
                   "libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 "
                   "libasound2 libatspi2.0-0")
-        elif "executable doesn't exist" in low or "playwright install" in low:
-            print("[bootstrap] ⚠️ Chromium не скачан. Выполните:")
-            print("  python -m playwright install chromium")
         return False
 
 
@@ -337,26 +367,60 @@ class Browser:
     def __init__(self):
         from playwright.sync_api import sync_playwright
 
-        self._pw = sync_playwright().start()
-        launch_args = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ]
+        self._pw = None
+        self._browser = None
+
         try:
-            self._browser = self._pw.chromium.launch(
-                headless=HEADLESS,
-                args=launch_args,
-            )
+            self._pw = sync_playwright().start()
+            launch_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ]
+
+            try:
+                self._browser = self._pw.chromium.launch(
+                    headless=HEADLESS, args=launch_args,
+                )
+            except Exception as launch_err:
+                le = str(launch_err).lower()
+                # Chromium не установлен — установим и попробуем снова
+                if "executable doesn't exist" in le or "playwright install" in le:
+                    log.warning("Chromium не найден, устанавливаю и пробую снова...")
+                    if _install_chromium():
+                        self._browser = self._pw.chromium.launch(
+                            headless=HEADLESS, args=launch_args,
+                        )
+                    else:
+                        raise
+                else:
+                    raise
         except Exception as e:
             try:
-                self._pw.stop()
+                if self._pw is not None:
+                    self._pw.stop()
             except Exception:
                 pass
+            # Почистим возможный висящий asyncio-loop
+            try:
+                import asyncio
+                asyncio.set_event_loop(None)
+            except Exception:
+                pass
+
+            err_lower = str(e).lower()
+            if "asyncio loop" in err_lower:
+                raise RuntimeError(
+                    "Playwright в этом процессе сломан (asyncio loop). "
+                    "Перезапустите бота."
+                ) from e
+            if "executable doesn't exist" in err_lower:
+                raise RuntimeError(
+                    "Chromium не установлен. Выполните: python -m playwright install chromium"
+                ) from e
             raise RuntimeError(
-                "Chromium не удалось запустить. "
-                "На Linux обычно не хватает системных библиотек. "
-                "Выполните под root:\n"
+                "Chromium не удалось запустить. На Linux обычно не хватает системных "
+                "библиотек. Выполните под root:\n"
                 "  sudo python3 -m playwright install-deps chromium\n"
                 f"Исходная ошибка: {e}"
             ) from e
@@ -418,7 +482,8 @@ class Browser:
             except Exception:
                 pass
         try:
-            self._pw.stop()
+            if self._pw is not None:
+                self._pw.stop()
         except Exception:
             pass
 
@@ -1495,6 +1560,9 @@ def worker_loop(vk) -> None:
     browser = None
     notified = load_json(NOTIFIED_FILE, {})
     next_auto = 0.0
+    browser_broken = False          # сломан ли playwright в этом процессе
+    browser_broken_notified = False # сообщили ли уже про поломку
+
     while True:
         timeout = max(1.0, next_auto - time.time()) if AUTO_NOTIFY else None
         try:
@@ -1506,9 +1574,41 @@ def worker_loop(vk) -> None:
             if not AUTO_NOTIFY:
                 continue
             next_auto = time.time() + CHECK_INTERVAL
+
         try:
-            if browser is None and (job["type"] == "af" or get_chats()):
-                browser = Browser()
+            # Пытаемся инициализировать браузер (если он нужен и ещё не инициализирован)
+            if browser is None and not browser_broken and (job["type"] == "af" or get_chats()):
+                try:
+                    browser = Browser()
+                except Exception as be:
+                    be_lower = str(be).lower()
+                    if "asyncio loop" in be_lower or "playwright в этом процессе" in be_lower:
+                        browser_broken = True
+                        log.error("Playwright сломан в этом процессе, браузер больше не запустится "
+                                  "до перезапуска бота: %s", be)
+                        if not browser_broken_notified:
+                            for target in get_chats():
+                                try:
+                                    send_vk(
+                                        vk, target,
+                                        "❗ Playwright в этом процессе сломался (asyncio loop). "
+                                        "Перезапустите бота, чтобы продолжить проверки.",
+                                    )
+                                except Exception:
+                                    pass
+                            browser_broken_notified = True
+                        if peer:
+                            try:
+                                send_vk(vk, peer,
+                                        "❗ Playwright сломан. Перезапустите бота.")
+                            except Exception:
+                                pass
+                        continue
+                    raise
+
+            if browser is None and browser_broken:
+                continue
+
             if job["type"] == "af":
                 run_af(browser, vk, peer, job["section"])
             elif get_chats():
@@ -1523,7 +1623,6 @@ def worker_loop(vk) -> None:
                     pass
                 browser = None
             err_msg = str(e) or type(e).__name__
-            log.error("Детали ошибки: %s", err_msg)
             stale = "Cookies устарели" in err_msg
             if stale:
                 text = "❗ Бот: cookies форума устарели, обновите cookies.txt."
@@ -1531,8 +1630,7 @@ def worker_loop(vk) -> None:
                 short = err_msg[:400]
                 text = (f"⚠ Не удалось получить данные с форума.\n\n"
                         f"Детали: {short}\n\n"
-                        f"Если в деталях упоминается Chromium/playwright — на Linux выполните "
-                        f"под root:\n"
+                        f"Если речь о Chromium/playwright — на Linux выполните под root:\n"
                         f"sudo python3 -m playwright install-deps chromium")
             if peer or stale:
                 for target in ([peer] if peer else get_chats()):
