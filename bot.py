@@ -19,6 +19,8 @@ import logging
 import os
 import queue
 import re
+import subprocess  # нужен, чтобы скачать Chromium, если хостинг его не поставил
+import sys
 import threading
 import time
 import asyncio
@@ -91,6 +93,27 @@ def parse_cookies(raw: str) -> dict:
     return cookies
 
 
+def install_chromium() -> None:
+    """Скачивает Chromium, если хостинг не поставил его при сборке."""
+    log.warning("Chromium не найден, скачиваю (это займёт 1-3 минуты)...")
+    try:
+        # Браузер + системные библиотеки (нужны права root)
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+            check=True,
+            timeout=900,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # Если системные библиотеки поставить не вышло, качаем хотя бы браузер
+        log.warning("Не вышло с системными библиотеками, пробую только браузер")
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+            timeout=900,
+        )
+    log.info("Chromium установлен")
+
+
 class Browser:
     """Настоящий Chromium: проходит JS-проверку анти-DDoS защиты форума."""
 
@@ -98,10 +121,27 @@ class Browser:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
+        launch_args = dict(
             headless=HEADLESS,
             args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
         )
+        try:
+            try:
+                self._browser = self._pw.chromium.launch(**launch_args)
+            except Exception as e:
+                # Браузера нет - скачиваем и пробуем ещё раз
+                if "Executable doesn't exist" not in str(e):
+                    raise
+                install_chromium()
+                self._browser = self._pw.chromium.launch(**launch_args)
+        except Exception:
+            # Обязательно останавливаем Playwright, иначе при следующей
+            # попытке будет ошибка про asyncio loop
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            raise
         kwargs = {
             "user_agent": USER_AGENT,
             "locale": "ru-RU",
