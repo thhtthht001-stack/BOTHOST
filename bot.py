@@ -95,15 +95,6 @@ class Browser:
     """Настоящий Chromium: проходит JS-проверку анти-DDoS защиты форума."""
 
     def __init__(self):
-        # === ИСПРАВЛЕНИЕ ОШИБКИ ASYNCIO ===
-        # Принудительно убираем event loop из текущего потока.
-        # Это гарантирует, что Playwright будет работать в синхронном режиме.
-        try:
-            asyncio.set_event_loop(None)
-        except Exception:
-            pass
-        # =================================
-
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
@@ -868,12 +859,6 @@ def run_af(browser, vk, peer_id: int) -> None:
 
 
 def worker_loop(vk) -> None:
-    # Гарантируем, что в этом потоке нет запущенного event loop
-    try:
-        asyncio.set_event_loop(None)
-    except Exception:
-        pass
-
     browser = None
     notified = load_json(NOTIFIED_FILE, {})
     next_auto = 0.0
