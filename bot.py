@@ -14,7 +14,145 @@ VK-бот: следит за разделами форума server 35 GROZNY
   /admins               — список владельцев и админов
 
 Запуск:  python bot.py
+
+При первом запуске бот сам поставит зависимости
+(vk-api, beautifulsoup4, playwright) и Chromium для Playwright.
 """
+
+# ======================= АВТОУСТАНОВКА ЗАВИСИМОСТЕЙ =======================
+import importlib
+import os as _os_bootstrap
+import site as _site_bootstrap
+import subprocess as _subprocess_bootstrap
+import sys as _sys_bootstrap
+
+_REQUIRED_PACKAGES = {
+    "vk_api": "vk-api",
+    "bs4": "beautifulsoup4",
+    "playwright": "playwright",
+}
+
+
+def _refresh_sys_path() -> None:
+    """После pip-установки refreshes sys.path, чтобы новые пакеты были видны."""
+    importlib.invalidate_caches()
+    try:
+        _site_bootstrap.main()
+    except Exception:
+        pass
+    user_site = ""
+    try:
+        user_site = _site_bootstrap.getusersitepackages()
+    except Exception:
+        pass
+    for p in (user_site,):
+        if p and p not in _sys_bootstrap.path:
+            _sys_bootstrap.path.insert(0, p)
+
+
+def _bootstrap_pip_packages() -> None:
+    missing = []
+    for mod, pkg in _REQUIRED_PACKAGES.items():
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            missing.append(pkg)
+    if not missing:
+        return
+
+    print(f"[bootstrap] Не хватает пакетов: {', '.join(missing)}. Устанавливаю...")
+
+    # обновим pip/setuptools/wheel — чтобы установка прошла ровно
+    try:
+        _subprocess_bootstrap.check_call(
+            [_sys_bootstrap.executable, "-m", "pip", "install",
+             "--upgrade", "pip", "setuptools", "wheel"]
+        )
+    except Exception as e:
+        print(f"[bootstrap] Не удалось обновить pip: {e}")
+
+    for pkg in missing:
+        print(f"[bootstrap] pip install {pkg}")
+        try:
+            _subprocess_bootstrap.check_call(
+                [_sys_bootstrap.executable, "-m", "pip", "install", "--upgrade", pkg]
+            )
+        except _subprocess_bootstrap.CalledProcessError as e:
+            print(f"[bootstrap] Обычная установка {pkg} не удалась ({e}), пробую --user")
+            try:
+                _subprocess_bootstrap.check_call(
+                    [_sys_bootstrap.executable, "-m", "pip", "install",
+                     "--user", "--upgrade", pkg]
+                )
+            except _subprocess_bootstrap.CalledProcessError as e2:
+                print(f"[bootstrap] Не смог установить {pkg}: {e2}")
+                _sys_bootstrap.exit(1)
+
+    _refresh_sys_path()
+
+
+def _chromium_installed() -> bool:
+    if _os_bootstrap.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "0":
+        return True
+    candidates = [
+        _os_bootstrap.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "",
+        _os_bootstrap.path.expanduser("~/.cache/ms-playwright"),
+        _os_bootstrap.path.expanduser("~/Library/Caches/ms-playwright"),
+        (
+            _os_bootstrap.path.join(_os_bootstrap.environ["LOCALAPPDATA"], "ms-playwright")
+            if _os_bootstrap.environ.get("LOCALAPPDATA") else ""
+        ),
+    ]
+    for d in candidates:
+        if not d or not _os_bootstrap.path.isdir(d):
+            continue
+        try:
+            for name in _os_bootstrap.listdir(d):
+                if name.startswith("chromium-"):
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def _bootstrap_chromium() -> None:
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        return  # pip-этап не прошёл — падать будем позже с понятной ошибкой
+    if _chromium_installed():
+        return
+
+    print("[bootstrap] Устанавливаю Chromium для Playwright...")
+    try:
+        _subprocess_bootstrap.check_call(
+            [_sys_bootstrap.executable, "-m", "playwright", "install", "chromium"]
+        )
+    except _subprocess_bootstrap.CalledProcessError as e:
+        print(f"[bootstrap] Ошибка установки Chromium: {e}")
+
+    if _sys_bootstrap.platform.startswith("linux"):
+        # системные библиотеки для Chromium (libnss3 и т.п.).
+        # Требует root/sudo; если не получится — просто предупреждаем.
+        print("[bootstrap] Проверяю системные зависимости Chromium (может нужен sudo)...")
+        try:
+            _subprocess_bootstrap.check_call(
+                [_sys_bootstrap.executable, "-m", "playwright", "install-deps", "chromium"]
+            )
+        except Exception as e:
+            print(f"[bootstrap] install-deps не выполнен: {e}")
+            print("[bootstrap] Если Chromium не запустится — установите зависимости вручную, "
+                  "например: sudo apt install -y libnss3 libatk-bridge2.0-0 libdrm2 "
+                  "libxkbcommon0 libgbm1 libasound2 libxcomposite1 libxdamage1 "
+                  "libxrandr2 libpango-1.0-0 libcairo2")
+
+
+_bootstrap_pip_packages()
+_bootstrap_chromium()
+# ===========================================================================
+
+
+# ---------------------- ОБЫЧНЫЕ ИМПОРТЫ ----------------------
 import json
 import logging
 import os
@@ -34,8 +172,6 @@ VK_TOKEN = os.getenv("VK_TOKEN", "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g
 
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "877246890"))
 
-# --- ССЫЛКИ НА РАЗДЕЛЫ ---
-# ВАЖНО: замени "ЗАМЕНИ_НА_ID" на реальные ID разделов.
 SECTION_URLS = {
     "obzhalovanie": os.getenv(
         "FORUM_URL_OBZHALOVANIE",
@@ -99,7 +235,7 @@ log = logging.getLogger("bot")
 
 # ---------------------- настройки ----------------------
 DEFAULT_SETTINGS = {
-    "active_section": None,  # раздел по умолчанию (для /af и авто-проверки)
+    "active_section": None,
     "sections": {
         "obzhalovanie": {"deadline_hours": DEADLINE_HOURS},
         "admins": {"deadline_hours": DEADLINE_HOURS},
@@ -704,14 +840,12 @@ def handle_af(vk, peer_id: int, sender_id: int = 0) -> None:
 
     section = get_active_section()
     if section:
-        # раздел по умолчанию установлен — сразу проверяем его
         send_vk(
             vk, peer_id,
             f"⏳ Проверяю раздел «{SECTION_LABELS[section]}», это займёт около минуты...",
         )
         job_queue.put({"type": "af", "peer": peer_id, "section": section})
     else:
-        # раздел по умолчанию не установлен — спрашиваем кнопками
         send_inline(
             vk, peer_id,
             "Какой раздел проверить на просроченные жалобы?\n\n"
@@ -755,7 +889,6 @@ def handle_callback(vk, event_object) -> None:
         elif cmd == "settings_menu":
             send_settings_menu(vk, peer_id, conv_msg_id)
 
-        # --- 1. Установить раздел по умолчанию ---
         elif cmd == "settings_active":
             edit_inline(
                 vk, peer_id, conv_msg_id,
@@ -790,7 +923,6 @@ def handle_callback(vk, event_object) -> None:
             else:
                 answer = {"type": "show_snackbar", "text": "Неверные данные"}
 
-        # --- 2. Время просрока ---
         elif cmd == "settings_time":
             edit_inline(
                 vk, peer_id, conv_msg_id,
@@ -840,7 +972,6 @@ def handle_callback(vk, event_object) -> None:
             else:
                 answer = {"type": "show_snackbar", "text": "Неверные данные"}
 
-        # --- 3. Убрать раздел по умолчанию ---
         elif cmd == "settings_clear_active":
             active = get_active_section()
             if not active:
@@ -868,7 +999,6 @@ def handle_callback(vk, event_object) -> None:
                 EMPTY_INLINE_KB,
             )
 
-        # --- /af: выбор раздела ---
         elif cmd == "af_run":
             section = payload.get("section")
             if section not in SECTION_LABELS:
@@ -1027,7 +1157,6 @@ def handle_message(vk, msg: dict) -> None:
     parts = cmd_text.split()
     cmd = parts[0] if parts else ""
 
-    # --- настройки ---
     if cmd in SETTINGS_WORDS:
         if not is_admin(sender_id):
             send_vk(vk, peer_id, "⛔ Только админы/владельцы могут менять настройки.")
@@ -1035,7 +1164,6 @@ def handle_message(vk, msg: dict) -> None:
         send_settings_menu(vk, peer_id)
         return
 
-    # --- команды управления доступом ---
     if cmd in ADDOWNER_WORDS:
         handle_add_owner_cmd(vk, peer_id, sender_id, msg)
         return
@@ -1052,12 +1180,10 @@ def handle_message(vk, msg: dict) -> None:
         handle_list_admins(vk, peer_id, sender_id)
         return
 
-    # --- /af ---
     if cmd in AF_WORDS:
         handle_af(vk, peer_id, sender_id)
         return
 
-    # --- старт / стоп ---
     if cmd_text not in START_WORDS | STOP_WORDS:
         return
 
