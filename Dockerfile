@@ -1,25 +1,22 @@
 FROM python:3.11-slim
 
-# Устанавливаем переменные окружения для корректной работы Python в Docker
-# (чтобы логи выводились сразу, а не копились в буфере)
+# Устанавливаем переменные окружения
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+# Фиксируем путь для браузеров Playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# Копируем файл с Python-зависимостями
+# Копируем и устанавливаем Python-зависимости
 COPY requirements.txt .
-
-# Устанавливаем Python-библиотеки
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем браузер Chromium и ВСЕ необходимые системные библиотеки для него
-# Флаг --with-deps автоматически подтянет нужные пакеты Linux
-RUN playwright install --with-deps chromium
+# Устанавливаем браузер Chromium и ВСЕ необходимые системные библиотеки.
+# Флаг --only-shell устанавливает только headless-версию, что экономит место.
+RUN playwright install --with-deps --only-shell chromium
 
-# Копируем все остальные файлы проекта (bot.py, json файлы и т.д.)
+# Копируем остальной код
 COPY . .
 
-# Команда для запуска бота
 CMD ["python", "bot.py"]
