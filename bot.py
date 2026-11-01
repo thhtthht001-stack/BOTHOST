@@ -1,11 +1,19 @@
 """
-VK-бот: следит за разделом «Обжалование наказаний» (сервер 35 GROZNY)
-на forum.blackrussia.online и пишет о просроченных жалобах во все беседы,
-где владелец беседы написал «старт» (выключить - «стоп»).
+VK-бот: следит за разделами форума forum.blackrussia.online (сервер 35 GROZNY)
+и пишет о просроченных обращениях в беседы, где владелец беседы написал «старт»
+(выключить - «стоп»).
+
+Разделы (ссылки вставляются в блок SECTIONS ниже):
+  • Обжалование наказаний
+  • Жалобы на администрацию
+  • Жалобы на игроков
 
 Команды:
   старт / стоп         — владелец беседы, админ, владелец бота
-  /af  (или /аф)       — в активной беседе, а также админы/владельцы в любой беседе
+  /af  (или /аф)       — спросит раздел кнопками (или сразу покажет «постоянный» раздел).
+                         В активной беседе, а также админы/владельцы в любой беседе
+  /setting (/настройки) — настройки беседы: постоянный раздел, срок рассмотрения.
+                         Владелец беседы, админы и владельцы бота
   /addadmin <id|@|реплай>   — владелец бота или /addowner-пользователь
   /addowner <id|@|реплай>   — только владелец бота (BOT_OWNER_ID)
   /removeadmin <id|@|реплай> — владелец бота или owner
@@ -32,17 +40,17 @@ from vk_api.exceptions import ApiError
 from vk_api.utils import get_random_id
 
 # ======================= НАСТРОЙКИ =======================
+# Токен сообщества VK. НЕ вставляйте его прямо в код.
+# Положите его в переменную окружения VK_TOKEN на хостинге
+# или в файл token.txt рядом с bot.py (одной строкой).
 VK_TOKEN = os.getenv("VK_TOKEN", "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ")
+if not VK_TOKEN and os.path.exists("token.txt"):
+    with open("token.txt", encoding="utf-8") as _f:
+        VK_TOKEN = _f.read().strip()
 
 # --- ВЛАДЕЛЕЦ БОТА ---
-# Может всё: /addowner, /addadmin, /remove*, старт/стоп, /af, /admins.
+# Может всё: /addowner, /addadmin, /remove*, старт/стоп, /af, /admins, /setting.
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID", "877246890"))
-
-# Ссылка на раздел «Обжалование наказаний» сервера GROZNY. ОБЯЗАТЕЛЬНО со слэшем в конце.
-FORUM_SECTION_URL = os.getenv(
-    "FORUM_SECTION_URL",
-    "https://forum.blackrussia.online/forums/Обжалование-наказаний.1615/",
-)
 
 # Cookies вашего админ-аккаунта из браузера (строка целиком).
 FORUM_COOKIES = os.getenv("FORUM_COOKIES", "")
@@ -56,7 +64,7 @@ USER_AGENT = os.getenv(
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 )
 
-DEADLINE_HOURS = float(os.getenv("DEADLINE_HOURS", "72"))
+DEADLINE_HOURS = float(os.getenv("DEADLINE_HOURS", "72"))   # срок по умолчанию (можно менять в /setting)
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "600"))
 RENOTIFY_HOURS = float(os.getenv("RENOTIFY_HOURS", "24"))
 MAX_PAGES = int(os.getenv("MAX_PAGES", "8"))
@@ -68,18 +76,61 @@ AF_COOLDOWN = int(os.getenv("AF_COOLDOWN", "15"))
 SERVER_LABEL = "💚 Сервер №35"
 API_VERSION = "5.199"
 CHECK_PREFIXES = ["ожидание", "на рассмотрении", "главному администратору"]
+
+# Какие сроки (в часах) можно выбрать кнопками в /setting
+DEADLINE_CHOICES = [24, 48, 72, 96]
+
+# ---------------------- РАЗДЕЛЫ ФОРУМА ----------------------
+# >>> СЮДА ВСТАВЛЯЙТЕ ССЫЛКИ НА РАЗДЕЛЫ <<<
+# Вместо ВСТАВЬТЕ_ССЫЛКУ_СЮДА впишите ссылку на раздел (в кавычках).
+# Ссылка должна начинаться с https:// . Слэш в конце бот добавит сам.
+#
+# "prefixes" - какие префиксы тем считаются «ждёт ответа».
+# Для жалоб на админов/игроков префиксы могут отличаться - тогда поправьте список.
+SECTIONS = {
+    "appeal": {
+        "title": "Обжалование наказаний",
+        "button": "Обжалование",
+        "icon": "⚜️",
+        "url": os.getenv(
+            "FORUM_SECTION_URL",
+            "https://forum.blackrussia.online/forums/Обжалование-наказаний.1615/",
+        ),
+        "prefixes": CHECK_PREFIXES,
+    },
+    "admin": {
+        "title": "Жалобы на администрацию",
+        "button": "Жалобы на администрацию",
+        "icon": "🛡️",
+        "url": os.getenv("ADMIN_COMPLAINTS_URL", "https://forum.blackrussia.online/forums/Жалобы-на-администрацию.1612/"),
+        "prefixes": CHECK_PREFIXES,
+    },
+    "players": {
+        "title": "Жалобы на игроков",
+        "button": "Жалобы на игроков",
+        "icon": "👤",
+        "url": os.getenv("PLAYER_COMPLAINTS_URL", "https://forum.blackrussia.online/forums/Жалобы-на-игроков.1614/"),
+        "prefixes": CHECK_PREFIXES,
+    },
+}
 # =========================================================
 
 NOTIFIED_FILE = "notified.json"
 CHATS_FILE = "chats.json"
 OWNERS_FILE = "owners.json"   # кто может /addadmin, /removeadmin, старт/стоп, /af
 ADMINS_FILE = "admins.json"   # кто может старт/стоп и /af
+SETTINGS_FILE = "settings.json"  # настройки каждой беседы (/setting)
 BROWSER_STATE = "browser_state.json"
 HEADLESS = os.getenv("HEADLESS", "1") == "1"
 BASE_URL = "https://forum.blackrussia.online"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("bot")
+
+
+def section_ready(key: str) -> bool:
+    """True, если для раздела вставлена настоящая ссылка."""
+    return SECTIONS[key]["url"].strip().lower().startswith("http")
 
 
 # ---------------------- форум ----------------------
@@ -267,10 +318,14 @@ def parse_threads(html: str) -> list[dict]:
     return threads
 
 
-def fetch_threads(browser: "Browser") -> list[dict]:
+def fetch_threads(browser: "Browser", section_url: str) -> list[dict]:
+    """Читает все страницы раздела по ссылке section_url."""
+    section_url = section_url.strip()
+    if not section_url.endswith("/"):
+        section_url += "/"  # без слэша страницы page-2 и далее не откроются
     result = []
     for page in range(1, MAX_PAGES + 1):
-        url = FORUM_SECTION_URL if page == 1 else f"{FORUM_SECTION_URL}page-{page}"
+        url = section_url if page == 1 else f"{section_url}page-{page}"
         final_url, html = browser.get_html(url)
         page_threads = parse_threads(html)
 
@@ -326,9 +381,9 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip().lower().replace("ё", "е")
 
 
-def is_pending(th: dict) -> bool:
+def is_pending(th: dict, prefixes: list = None) -> bool:
     prefix = norm(th["prefix"])
-    return any(norm(p) in prefix for p in CHECK_PREFIXES)
+    return any(norm(p) in prefix for p in (prefixes or CHECK_PREFIXES))
 
 
 # ---------------------- вспомогательное ----------------------
@@ -456,8 +511,8 @@ def parse_target_id(msg: dict) -> int | None:
 # ---------------------- активные беседы ----------------------
 chats_lock = threading.Lock()
 job_queue: "queue.Queue[dict]" = queue.Queue()
-cache = {"time": 0.0, "threads": []}
-last_af: dict = {}
+cache: dict = {}      # кэш тем по разделам: {ключ_раздела: {"time": ..., "threads": [...]}}
+last_af: dict = {}    # защита от спама командой /af и кнопками
 
 
 def get_chats() -> list[int]:
@@ -485,8 +540,30 @@ def remove_chat(peer_id: int) -> bool:
         return True
 
 
+# ---------------------- настройки бесед (/setting) ----------------------
+settings_lock = threading.Lock()
+
+
+def get_settings(peer_id: int) -> dict:
+    """Настройки беседы. Если ничего не меняли - берутся значения по умолчанию."""
+    with settings_lock:
+        data = load_json(SETTINGS_FILE, {})
+    st = {"pinned": False, "section": "appeal", "deadline": DEADLINE_HOURS}
+    st.update(data.get(str(peer_id), {}))
+    if st["section"] not in SECTIONS:
+        st["section"] = "appeal"
+    return st
+
+
+def update_settings(peer_id: int, **changes) -> None:
+    with settings_lock:
+        data = load_json(SETTINGS_FILE, {})
+        data.setdefault(str(peer_id), {}).update(changes)
+        save_json(SETTINGS_FILE, data)
+
+
 # ---------------------- VK ----------------------
-def send_vk(vk, peer_id: int, text: str, format_data: str = None) -> None:
+def send_vk(vk, peer_id: int, text: str, format_data: str = None, keyboard: str = None) -> None:
     params = dict(
         peer_id=peer_id,
         message=text,
@@ -495,7 +572,33 @@ def send_vk(vk, peer_id: int, text: str, format_data: str = None) -> None:
     )
     if format_data:
         params["format_data"] = format_data
+    if keyboard:
+        params["keyboard"] = keyboard
     vk.messages.send(**params)
+
+
+def edit_vk(vk, peer_id: int, conversation_message_id: int, text: str, keyboard: str = None) -> None:
+    """Меняет текст и кнопки уже отправленного сообщения бота."""
+    params = dict(
+        peer_id=peer_id,
+        conversation_message_id=conversation_message_id,
+        message=text,
+        dont_parse_links=1,
+    )
+    if keyboard:
+        params["keyboard"] = keyboard
+    vk.messages.edit(**params)
+
+
+def answer_event(vk, event_id: str, user_id: int, peer_id: int, text: str = None) -> None:
+    """Отвечает на нажатие кнопки (иначе у кнопки будет бесконечная загрузка).
+    text - всплывающая подсказка (до 90 символов)."""
+    params = dict(event_id=event_id, user_id=user_id, peer_id=peer_id)
+    if text:
+        params["event_data"] = json.dumps(
+            {"type": "show_snackbar", "text": text[:90]}, ensure_ascii=False
+        )
+    vk.messages.sendMessageEventAnswer(**params)
 
 
 def get_owner_id(vk, peer_id: int):
@@ -506,9 +609,20 @@ def get_owner_id(vk, peer_id: int):
     return None
 
 
+def can_manage(vk, peer_id: int, uid: int) -> bool:
+    """Кто может менять настройки: админы/владельцы бота и владелец беседы."""
+    if is_admin(uid):
+        return True
+    try:
+        return get_owner_id(vk, peer_id) == uid
+    except ApiError:
+        return False
+
+
 START_WORDS = {"старт", "start"}
 STOP_WORDS = {"стоп", "stop"}
 AF_WORDS = {"af", "аф"}  # латиницей и кириллицей
+SETTING_WORDS = {"setting", "settings", "настройки", "настройка"}
 
 ADDOWNER_WORDS = {"addowner", "добавитьвладельца", "добавьвладельца"}
 ADDADMIN_WORDS = {"addadmin", "добавитьадмина", "добавьадмина"}
@@ -517,18 +631,253 @@ REMOVEADMIN_WORDS = {"removeadmin", "удалитьадмина", "удалиа�
 ADMINS_LIST_WORDS = {"admins"}
 
 
+# ---------------------- кнопки и экраны ----------------------
+LINE = "━━━━━━━━━━━━━━━━━━"
+
+
+def cb_button(label: str, payload: dict, color: str = "secondary") -> dict:
+    """Кнопка, встроенная в сообщение. color: primary, secondary, positive, negative."""
+    return {
+        "action": {
+            "type": "callback",
+            "label": label[:40],
+            "payload": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        },
+        "color": color,
+    }
+
+
+def make_keyboard(rows: list) -> str:
+    return json.dumps({"inline": True, "buttons": rows}, ensure_ascii=False)
+
+
+def af_menu_screen() -> tuple[str, str]:
+    """Сообщение «Какой раздел хотите проверить?» с кнопками разделов."""
+    text = (
+        "⚜️ ПРОВЕРКА ПРОСРОЧЕК\n"
+        f"{LINE}\n\n"
+        "Какой раздел хотите проверить?\n\n"
+        "👇 Выберите раздел кнопкой ниже"
+    )
+    buttons = [
+        cb_button(sec["button"], {"c": "af", "s": key}, "primary")
+        for key, sec in SECTIONS.items()
+    ]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]  # по две кнопки в ряд
+    return text, make_keyboard(rows)
+
+
+def settings_screen(peer_id: int) -> tuple[str, str]:
+    """Главный экран /setting."""
+    st = get_settings(peer_id)
+    pinned = st["pinned"]
+    hours = float(st["deadline"])
+    if pinned:
+        pin_line = f"✅ Включено → «{SECTIONS[st['section']]['button']}»"
+    else:
+        pin_line = "❌ Выключено (бот спрашивает раздел)"
+    text = (
+        "⚙️ НАСТРОЙКИ БОТА\n"
+        f"{LINE}\n\n"
+        "📌 Сделать раздел постоянным\n"
+        "(не спрашивать раздел каждый раз при /af)\n"
+        f"Сейчас: {pin_line}\n"
+        "Нажмите «Да», чтобы выбрать раздел\n\n"
+        "⏱ Срок рассмотрения (часов)\n"
+        "(через сколько часов обращение считается просроченным)\n"
+        f"Сейчас: {hours:g} ч.\n\n"
+        f"{LINE}\n"
+        "👇 Нажмите кнопку, чтобы изменить"
+    )
+    rows = [
+        [
+            cb_button("✅ Да" if pinned else "Да", {"c": "pin", "v": 1},
+                      "positive" if pinned else "secondary"),
+            cb_button("Нет" if pinned else "✅ Нет", {"c": "pin", "v": 0},
+                      "secondary" if pinned else "negative"),
+        ],
+        [
+            cb_button(f"✅ {h}" if float(h) == hours else f"{h}", {"c": "dl", "v": h},
+                      "primary" if float(h) == hours else "secondary")
+            for h in DEADLINE_CHOICES
+        ],
+    ]
+    return text, make_keyboard(rows)
+
+
+def sections_screen(peer_id: int) -> tuple[str, str]:
+    """Экран «Настройки разделов» (после нажатия «Да»)."""
+    st = get_settings(peer_id)
+    current = SECTIONS[st["section"]]["button"] if st["pinned"] else "не выбран"
+    text = (
+        "📂 НАСТРОЙКИ РАЗДЕЛОВ\n"
+        f"{LINE}\n\n"
+        "Выберите раздел, просрочки которого бот будет\n"
+        "показывать сразу по команде /af.\n\n"
+        f"Сейчас выбран: {current}\n\n"
+        "👇 Выберите раздел кнопкой ниже"
+    )
+    buttons = []
+    for key, sec in SECTIONS.items():
+        chosen = st["pinned"] and key == st["section"]
+        buttons.append(cb_button(
+            f"✅ {sec['button']}" if chosen else sec["button"],
+            {"c": "sec", "s": key},
+            "positive" if chosen else "primary",
+        ))
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([cb_button("◀ Назад", {"c": "home"}, "secondary")])
+    return text, make_keyboard(rows)
+
+
+shown_screens: dict = {}  # что сейчас показано в сообщении (чтобы не править его одинаково дважды)
+
+
+def show_screen(vk, peer_id: int, cmid, screen: tuple[str, str]) -> None:
+    """Обновляет сообщение с настройками. Если не вышло - отправляет новое."""
+    text, kb = screen
+    key = (peer_id, cmid)
+    if cmid:
+        if shown_screens.get(key) == (text, kb):
+            return  # уже так показано
+        try:
+            edit_vk(vk, peer_id, cmid, text, kb)
+            if len(shown_screens) > 500:
+                shown_screens.clear()
+            shown_screens[key] = (text, kb)
+            return
+        except ApiError as e:
+            log.warning("Не удалось изменить сообщение (%s), отправляю новое", e)
+    send_vk(vk, peer_id, text, keyboard=kb)
+
+
+# ---------------------- запуск проверки /af ----------------------
+def start_af(vk, peer_id: int, key: str) -> tuple[bool, str]:
+    """Ставит проверку раздела в очередь. Возвращает (запущено, текст-подсказка)."""
+    sec = SECTIONS[key]
+    if not section_ready(key):
+        return False, f"⚠ Ссылка раздела «{sec['button']}» не задана в bot.py"
+    now = time.time()
+    since = now - last_af.get(("run", peer_id), 0)
+    if since < AF_COOLDOWN:
+        return False, f"Подождите {int(AF_COOLDOWN - since) + 1} сек."
+    last_af[("run", peer_id)] = now
+    hours = float(get_settings(peer_id)["deadline"])
+    if now - cache.get(key, {}).get("time", 0.0) > CACHE_SECONDS:
+        send_vk(vk, peer_id, f"⏳ Проверяю раздел «{sec['button']}», это займёт около минуты...")
+    job_queue.put({"type": "af", "peer": peer_id, "section": key, "hours": hours})
+    return True, f"⏳ Проверяю раздел «{sec['button']}»..."
+
+
 def handle_af(vk, peer_id: int, sender_id: int = 0) -> None:
     # админ/владелец может /af в любой беседе, обычный юзер — только в активной
     if not is_admin(sender_id) and peer_id not in get_chats():
         send_vk(vk, peer_id, "Бот выключен в этой беседе. Владелец беседы должен написать «старт».")
         return
     now = time.time()
-    if now - last_af.get(peer_id, 0) < AF_COOLDOWN:
+    if now - last_af.get(("cmd", peer_id), 0) < AF_COOLDOWN:
         return
-    last_af[peer_id] = now
-    if now - cache["time"] > CACHE_SECONDS:
-        send_vk(vk, peer_id, "⏳ Проверяю форум, это займёт около минуты...")
-    job_queue.put({"type": "af", "peer": peer_id})
+    last_af[("cmd", peer_id)] = now
+
+    st = get_settings(peer_id)
+    if st["pinned"]:
+        # раздел выбран постоянно - сразу проверяем его, ничего не спрашивая
+        started, text = start_af(vk, peer_id, st["section"])
+        if not started:
+            send_vk(vk, peer_id, text)
+        return
+    text, kb = af_menu_screen()
+    send_vk(vk, peer_id, text, keyboard=kb)
+
+
+def handle_settings_cmd(vk, peer_id: int, sender_id: int) -> None:
+    if not can_manage(vk, peer_id, sender_id):
+        send_vk(vk, peer_id, "⛔ Настройки могут менять только владелец беседы и админы бота.")
+        return
+    text, kb = settings_screen(peer_id)
+    send_vk(vk, peer_id, text, keyboard=kb)
+
+
+# ---------------------- нажатия на кнопки ----------------------
+def process_button(vk, peer_id: int, user_id: int, cmid, payload: dict) -> str | None:
+    """Выполняет действие кнопки. Возвращает текст всплывающей подсказки."""
+    cmd = payload.get("c")
+
+    # --- кнопки выбора раздела под сообщением /af ---
+    if cmd == "af":
+        key = payload.get("s")
+        if key not in SECTIONS:
+            return "Неизвестный раздел"
+        if not is_admin(user_id) and peer_id not in get_chats():
+            return "Бот выключен в этой беседе"
+        return start_af(vk, peer_id, key)[1]
+
+    # --- кнопки настроек ---
+    if cmd not in ("pin", "sec", "dl", "home"):
+        return None
+    if not can_manage(vk, peer_id, user_id):
+        return "⛔ Менять настройки может только владелец беседы или админ"
+    st = get_settings(peer_id)
+
+    if cmd == "pin":
+        if payload.get("v"):  # нажали «Да» - показываем выбор раздела
+            show_screen(vk, peer_id, cmid, sections_screen(peer_id))
+            return "Выберите раздел"
+        if not st["pinned"]:
+            return "Уже выбрано"
+        update_settings(peer_id, pinned=False)  # нажали «Нет»
+        show_screen(vk, peer_id, cmid, settings_screen(peer_id))
+        return "Теперь бот будет спрашивать раздел"
+
+    if cmd == "sec":
+        key = payload.get("s")
+        if key not in SECTIONS:
+            return "Неизвестный раздел"
+        update_settings(peer_id, pinned=True, section=key)
+        show_screen(vk, peer_id, cmid, settings_screen(peer_id))
+        return f"✅ Постоянный раздел: {SECTIONS[key]['button']}"
+
+    if cmd == "dl":
+        try:
+            hours = int(payload.get("v"))
+        except (TypeError, ValueError):
+            return None
+        if hours not in DEADLINE_CHOICES:
+            return None
+        if float(st["deadline"]) == hours:
+            return "Уже выбрано"
+        update_settings(peer_id, deadline=hours)
+        show_screen(vk, peer_id, cmid, settings_screen(peer_id))
+        return f"✅ Срок рассмотрения: {hours} ч."
+
+    if cmd == "home":  # кнопка «Назад»
+        show_screen(vk, peer_id, cmid, settings_screen(peer_id))
+    return None
+
+
+def handle_event(vk, ev) -> None:
+    """Обработка нажатия на callback-кнопку."""
+    peer_id = ev.get("peer_id", 0)
+    user_id = ev.get("user_id", 0)
+    event_id = ev.get("event_id")
+    cmid = ev.get("conversation_message_id")
+    payload = ev.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {}
+
+    note = None
+    try:
+        note = process_button(vk, peer_id, user_id, cmid, payload)
+    except Exception:
+        log.exception("Ошибка обработки кнопки")
+        note = "⚠ Ошибка, попробуйте ещё раз"
+    try:
+        answer_event(vk, event_id, user_id, peer_id, note)
+    except Exception:
+        log.warning("Не удалось ответить на нажатие кнопки", exc_info=True)
 
 
 # --- команды управления доступом ---
@@ -652,8 +1001,9 @@ def handle_message(vk, msg: dict) -> None:
     raw = msg.get("text", "")
 
     # нормализованный текст для определения команды (без @-упоминания сообщества)
-    cmd_text = re.sub(r"\[club\d+\|[^\]]*\]", "", raw)
-    cmd_text = cmd_text.strip().lstrip("/").strip().lower()
+    no_mention = re.sub(r"\[club\d+\|[^\]]*\]", "", raw).strip()
+    has_slash = no_mention.startswith("/")
+    cmd_text = no_mention.lstrip("/").strip().lower()
     parts = cmd_text.split()
     cmd = parts[0] if parts else ""
 
@@ -672,6 +1022,11 @@ def handle_message(vk, msg: dict) -> None:
         return
     if cmd in ADMINS_LIST_WORDS:
         handle_list_admins(vk, peer_id, sender_id)
+        return
+
+    # --- /setting (только со слэшем, чтобы не срабатывало на обычное слово «настройки») ---
+    if cmd in SETTING_WORDS and has_slash:
+        handle_settings_cmd(vk, peer_id, sender_id)
         return
 
     # --- /af ---
@@ -735,11 +1090,17 @@ def listen(vk_session, vk) -> None:
         try:
             longpoll = VkBotLongPoll(vk_session, group_id)
             for event in longpoll.listen():
+                etype = getattr(event.type, "value", event.type)
                 if event.type == VkBotEventType.MESSAGE_NEW:
                     try:
                         handle_message(vk, event.message)
                     except Exception:
                         log.exception("Ошибка обработки сообщения")
+                elif etype == "message_event":  # нажатие на кнопку под сообщением
+                    try:
+                        handle_event(vk, event.object)
+                    except Exception:
+                        log.exception("Ошибка обработки нажатия кнопки")
         except Exception:
             log.exception("Long Poll отвалился, переподключаюсь через 5 сек.")
             time.sleep(5)
@@ -769,13 +1130,15 @@ def notify_chat(vk, chat_id: int, items: list, st: dict, now: float) -> None:
 
 
 def check(browser, vk, notified: dict) -> None:
+    """Автоматическая проверка (AUTO_NOTIFY=1). Следит только за разделом обжалований."""
     chats = get_chats()
     if not chats:
         log.info("Нет включённых бесед (владелец беседы должен написать «старт»)")
         return
 
+    sec = SECTIONS["appeal"]
     now = time.time()
-    threads = fetch_threads(browser)
+    threads = fetch_threads(browser, sec["url"])
     log.info("Получено тем: %d", len(threads))
 
     from collections import Counter
@@ -786,7 +1149,7 @@ def check(browser, vk, notified: dict) -> None:
     overdue_items = []
     n_too_old = n_not_yet = 0
     for th in threads:
-        if not is_pending(th):
+        if not is_pending(th, sec["prefixes"]):
             continue
         pending_ids.add(th["id"])
         age = now - th["created"]
@@ -830,13 +1193,13 @@ def utf16_len(s: str) -> int:
     return len(s.encode("utf-16-le")) // 2
 
 
-def overdue_rows(threads: list, now: float) -> list:
+def overdue_rows(threads: list, now: float, prefixes: list, hours: float) -> list:
     rows = []
     for th in threads:
-        if not is_pending(th):
+        if not is_pending(th, prefixes):
             continue
         age = now - th["created"]
-        if age <= DEADLINE_HOURS * 3600:
+        if age <= hours * 3600:
             continue
         if MAX_AGE_DAYS and age > MAX_AGE_DAYS * 86400:
             continue
@@ -845,8 +1208,9 @@ def overdue_rows(threads: list, now: float) -> list:
     return rows
 
 
-def build_messages(rows: list, with_links: bool = True, per_message: int = 40) -> list:
-    head = f"⚜️ Обжалование наказаний (>{DEADLINE_HOURS:g}ч)\n\n{SERVER_LABEL}\n"
+def build_messages(rows: list, section: dict, hours: float,
+                   with_links: bool = True, per_message: int = 40) -> list:
+    head = f"{section['icon']} {section['title']} (>{hours:g}ч)\n\n{SERVER_LABEL}\n"
     chunks = [rows[i:i + per_message] for i in range(0, len(rows), per_message)] or [[]]
     out, n = [], 0
     for ci, chunk in enumerate(chunks):
@@ -857,7 +1221,7 @@ def build_messages(rows: list, with_links: bool = True, per_message: int = 40) -
         for age, th in chunk:
             n += 1
             text += f"🖥️ {n}. {int(age // 3600)}ч - "
-            label = th["prefix"]
+            label = th["prefix"] or th["title"][:30] or "Тема"
             if with_links:
                 items.append({
                     "type": "url",
@@ -875,27 +1239,37 @@ def build_messages(rows: list, with_links: bool = True, per_message: int = 40) -
     return out
 
 
-def send_report(vk, peer_id: int, rows: list) -> None:
+def send_report(vk, peer_id: int, rows: list, section: dict, hours: float) -> None:
     try:
-        for text, fd in build_messages(rows, with_links=True):
+        for text, fd in build_messages(rows, section, hours, with_links=True):
             send_vk(vk, peer_id, text, fd)
             time.sleep(0.5)
     except ApiError as e:
         if e.code == 917:
             raise
         log.warning("Не сработало форматирование ссылок (%s), шлю обычным текстом", e)
-        for text, _ in build_messages(rows, with_links=False):
+        for text, _ in build_messages(rows, section, hours, with_links=False):
             send_vk(vk, peer_id, text)
             time.sleep(0.5)
 
 
-def run_af(browser, vk, peer_id: int) -> None:
-    if time.time() - cache["time"] > CACHE_SECONDS:
-        cache["threads"] = fetch_threads(browser)
-        cache["time"] = time.time()
-    rows = overdue_rows(cache["threads"], time.time())
-    log.info("/af в беседе %s: просроченных %d", peer_id - 2000000000, len(rows))
-    send_report(vk, peer_id, rows)
+def run_af(browser, vk, peer_id: int, section_key: str, hours: float) -> None:
+    sec = SECTIONS[section_key]
+    c = cache.setdefault(section_key, {"time": 0.0, "threads": []})
+    if time.time() - c["time"] > CACHE_SECONDS:
+        threads = fetch_threads(browser, sec["url"])
+        if not threads:
+            # Пустой результат не запоминаем и честно говорим об этом,
+            # иначе неверная ссылка выглядела бы как «просрочек нет»
+            send_vk(vk, peer_id,
+                    f"⚠ В разделе «{sec['button']}» не найдено ни одной темы.\n"
+                    "Проверьте ссылку раздела в bot.py и доступ cookies к этому разделу.")
+            return
+        c["threads"] = threads
+        c["time"] = time.time()
+    rows = overdue_rows(c["threads"], time.time(), sec["prefixes"], hours)
+    log.info("/af [%s] в беседе %s: просроченных %d", section_key, peer_id - 2000000000, len(rows))
+    send_report(vk, peer_id, rows, sec, hours)
 
 
 def worker_loop(vk) -> None:
@@ -917,7 +1291,7 @@ def worker_loop(vk) -> None:
             if browser is None and (job["type"] == "af" or get_chats()):
                 browser = Browser()
             if job["type"] == "af":
-                run_af(browser, vk, peer)
+                run_af(browser, vk, peer, job["section"], job["hours"])
             elif get_chats():
                 check(browser, vk, notified)
                 save_json(NOTIFIED_FILE, notified)
@@ -938,12 +1312,18 @@ def worker_loop(vk) -> None:
 
 
 def main() -> None:
+    if not VK_TOKEN:
+        raise SystemExit(
+            "Не найден токен VK. Задайте переменную окружения VK_TOKEN "
+            "или положите токен в файл token.txt рядом с bot.py."
+        )
     vk_session = vk_api.VkApi(token=VK_TOKEN, api_version=API_VERSION)
     vk = vk_session.get_api()
     vk_worker = vk_api.VkApi(token=VK_TOKEN, api_version=API_VERSION).get_api()
 
-    log.info("Бот запущен. Владелец: id%s. Авто-уведомления: %s",
-             BOT_OWNER_ID, "вкл" if AUTO_NOTIFY else "выкл")
+    ready = [s["button"] for k, s in SECTIONS.items() if section_ready(k)]
+    log.info("Бот запущен. Владелец: id%s. Авто-уведомления: %s. Разделы со ссылкой: %s",
+             BOT_OWNER_ID, "вкл" if AUTO_NOTIFY else "выкл", ", ".join(ready) or "нет")
     threading.Thread(target=worker_loop, args=(vk_worker,), daemon=True).start()
     listen(vk_session, vk)
 
